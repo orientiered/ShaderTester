@@ -9,10 +9,13 @@
 #include <shobjidl_core.h>
 #include <fstream>
 #include <thread>
+
 using namespace std;
 using namespace sf;
 
 Font font;
+
+sf::Clock mainClock; //глобальный таймер
 
 Vector2f reverseY(Vector2f vec) {
 	vec.y = -vec.y;
@@ -29,7 +32,9 @@ Vector2f operator/ (const Vector2f left, const Vector2f right) {
 }
 
 
+//Загружает файл в байтовом виде в вектор
 vector<char> loadFile(wstring path) {
+	
 	std::ifstream texture_file(path, std::ifstream::binary);
 	std::vector<char> buffer;
 	if (texture_file) {
@@ -54,7 +59,11 @@ vector<char> loadFile(wstring path) {
 
 }
 
+
+//Вызывает стандартный диалог Windows для выбора файла и возвращает путь выбранного файла
+//Нет ограничений на тип файла
 wstring browseFile() {
+	
 	wstring filePath = L"";
 	HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
 	if (SUCCEEDED(hr)) {
@@ -86,32 +95,78 @@ wstring browseFile() {
 	return filePath;
 }
 
-class Button {
+//Класс с статическими методами для получения позиции мыши
+class InputPos {
+private:
+	InputPos() {};
+
+public:
+	static RenderWindow* window;
+
+	static Vector2i get() {
+		return Mouse::getPosition();
+	}
+
+	static Vector2i getW() {
+		if (window == nullptr) return get();
+		return Mouse::getPosition(*window);
+	}
+
+	static Vector2f getF() {
+		return Vector2f(Mouse::getPosition());
+	}
+
+	static Vector2f getWF() {
+		if (window == nullptr) return getF();
+		return Vector2f(Mouse::getPosition(*window));
+	}
+
+	static Vector2u getWSize() {
+		if (window == nullptr) return Vector2u(0, 0);
+		return window->getSize();
+	}
+
+	static Vector2f getWFSize() {
+		
+		if (window == nullptr) return Vector2f(0, 0);
+		return Vector2f(window->getSize());
+	}
+};
+RenderWindow* InputPos::window = nullptr;
+
+///Класс для создания кнопок
+///Для работы нужно каждый кадр опрашивать кнопку методом .handle()
+class Button: public Drawable { 
+	
 private:
 	Texture tex;
 	Sprite icon;
 	bool state = 0, click = 0;
-	RenderWindow& window;
 public:
 	int id = -1;
+	Button() {}
 
-	Button(Vector2f pos, Vector2f size, RenderWindow& w, const wchar_t* texture_path) : window(w) {
-
+	void init(Vector2f pos, Vector2f size, const wchar_t* texture_path) {
 		auto buffer = loadFile(texture_path);
 		tex.loadFromMemory(&buffer[0], buffer.size());
 		tex.setSmooth(1);
 		icon.setTexture(tex);
 		icon.setScale(size / Vector2f(tex.getSize()));
 		icon.setPosition(pos);
+	}
 
+	Button(Vector2f pos, Vector2f size, const wchar_t* texture_path) {
+		init(pos, size, texture_path);
 	}
 
 	void move(Vector2f delta) {
 		icon.move(delta);
 	}
+	/// @brief Возвращает true, если кнопка была нажата; нужно вызывать каждый кадр
+	/// @return 
 	bool handle() {
 		click = 0;
-		if (icon.getGlobalBounds().contains(Vector2f(Mouse::getPosition(window)))) {
+		if (icon.getGlobalBounds().contains(InputPos::getWF())) {
 			icon.setColor(Color(227, 212, 188));
 			if (state && !Mouse::isButtonPressed(Mouse::Left)) {
 				state = 0;
@@ -126,18 +181,17 @@ public:
 		}
 		return click;
 	}
-	void draw() {
-		window.draw(icon);
+	virtual void draw(sf::RenderTarget& target, sf::RenderStates states) const {
+		target.draw(icon, states);
 	}
 
 };
 
-class Option {
+class Option: public Drawable {
 private:
 	RectangleShape background;
 	Text fileName;
-	Button* deleteShader;
-	RenderWindow& window;
+	Button deleteShader;
 	Shader shader;
 public:
 	void asyncLoad() {
@@ -153,7 +207,10 @@ public:
 		}
 		fileName.setString(text);
 	}
-	Option(Vector2f pos, Vector2f size, RenderWindow& wnd) : window(wnd) {
+
+	Option() {}
+
+	void init(Vector2f pos, Vector2f size) {
 		background.setSize(size);
 		background.setPosition(pos);
 		background.setFillColor(Color(95, 95, 95, 200));
@@ -161,53 +218,52 @@ public:
 
 		fileName.setFont(font);
 		fileName.setString(text);
-		fileName.setPosition(pos + size / 10.f);
+		fileName.setPosition(pos + size / 15.f);
 
 		shader.loadFromFile("res/default.frag", Shader::Fragment);
 
-		deleteShader = new Button(pos + size * Vector2f(0.8, 0.1), Vector2f(size.y * 0.8, size.y * 0.8), window, L"res/delete.png");
+		deleteShader.init(pos + size * Vector2f(0.8, 0.1), Vector2f(size.y * 0.8, size.y * 0.8), L"res/delete.png");
 
 		thread fileLoader(&Option::asyncLoad, this);
 		fileLoader.detach();
 	}
+
+	Option(Vector2f pos, Vector2f size){
+		init(pos, size);
+	}
+
+	
 	Shader* getShader() {
 		return &shader;
-	}
-	~Option() {
-		delete deleteShader;
 	}
 
 	void move(Vector2f delta) {
 		background.move(delta);
 		fileName.move(delta);
-		deleteShader->move(delta);
+		deleteShader.move(delta);
 	}
 	bool handle() {
-		return deleteShader->handle();
+		return deleteShader.handle();
 	}
-	void draw() {
-		window.draw(background);
-		window.draw(fileName);
-		deleteShader->draw();
+	virtual void draw(sf::RenderTarget& target, sf::RenderStates states) const {
+		target.draw(background, states);
+		target.draw(fileName, states);
+		target.draw(deleteShader, states);
 	}
 
 };
 
-class RectangleShader {
+class RectangleShader: public Drawable {
 private:
 	RectangleShape rect;
 	RectangleShape titleBar;
 	RectangleShape resizeIcon1, resizeIcon2;
 
-	RenderWindow& window;
-	Clock& clock;
 
 	Vector2f offset = { 0., 0. };
 	float scale = 1;
 	enum class MoveType { None, Shader, Window, Resize };
 	MoveType mType = MoveType::None;
-
-
 
 public:
 	Option* opt;
@@ -215,7 +271,7 @@ public:
 	Vector2f iMouse;
 	bool smode = false; //доп. переменная; инвертируется при нажатии колёсика мыши
 	
-	RectangleShader(Vector2f size, Vector2f pos, Clock& clk, RenderWindow& wind, Option* ptr) : window(wind), clock(clk), opt(ptr) {
+	RectangleShader(Vector2f size, Vector2f pos, Option* ptr) : opt(ptr) {
 		rect.setSize(size);
 		rect.setPosition(pos);
 
@@ -232,24 +288,24 @@ public:
 		resizeIcon2.setSize({ 5, 20 });
 		resizeIcon2.setPosition(pos + size + Vector2f(-3, -18));
 
-		offset = -Vector2f(rect.getPosition().x, float(window.getSize().y) - float(rect.getSize().y) - rect.getPosition().y);
+		offset = -Vector2f(rect.getPosition().x,  InputPos::getWFSize().y - float(rect.getSize().y) - rect.getPosition().y);
 	}
 	Vector2f getCenter() {
-		return Vector2f(-offset.x + rect.getSize().x / 2, window.getSize().y - rect.getSize().y / 2 + offset.y);
+		return Vector2f(-offset.x + rect.getSize().x / 2, InputPos::getWFSize().y - rect.getSize().y / 2 + offset.y);
 	}
 	Vector2f getPosition() { return rect.getPosition(); }
 	Vector2f getSize() { return rect.getSize(); }
 	FloatRect getBoundary() { return rect.getGlobalBounds(); }
 
 	void iMouseUpdate() {
-		iMouse = Vector2f(Mouse::getPosition(window));
+		iMouse = InputPos::getWF();
 	}
 	void zoom(float delta) {
 		delta = delta > 0 ? 1.f : -1.f;
 		float k = pow(0.7, -delta);
 		if (scale * k > 0.1) {
 			scale *= k;
-			offset += reverseY(Vector2f(Mouse::getPosition(window)) - (getCenter())) * (k - 1);
+			offset += reverseY(InputPos::getWF() - (getCenter())) * (k - 1);
 		}
 	}
 	void setMoveType(Vector2i posi) {
@@ -263,7 +319,7 @@ public:
 			mType = MoveType::Resize;
 	}
 	void move(Vector2i lastPos) {
-		Vector2f delta = Vector2f(Mouse::getPosition(window) - lastPos);
+		Vector2f delta = Vector2f(InputPos::getW() - lastPos);
 		switch (mType) {
 		case MoveType::Shader:
 			offset += -reverseY(delta);
@@ -286,97 +342,93 @@ public:
 		}
 
 	}
-	void draw() {
+	virtual void draw(sf::RenderTarget& target, sf::RenderStates states) const {
 		Shader* shader = opt->getShader();
 		shader->setUniform("iResolution", Vector2f(rect.getSize()));
-		shader->setUniform("windowRes", Vector2f(window.getSize()));
-		shader->setUniform("iTime", clock.getElapsedTime().asSeconds());
+		shader->setUniform("windowRes", InputPos::getWFSize());
+		shader->setUniform("iTime", mainClock.getElapsedTime().asSeconds());
 		shader->setUniform("offset", offset);
 		shader->setUniform("globalScale", scale);
 		shader->setUniform("iMouse", Glsl::Vec3{iMouse.x, iMouse.y, float(smode)});
-		window.draw(rect, shader);
-		window.draw(titleBar);
-		window.draw(resizeIcon1);
-		window.draw(resizeIcon2);
+		target.draw(rect, shader);
+		target.draw(titleBar, states);
+		target.draw(resizeIcon1, states);
+		target.draw(resizeIcon2, states);
 	}
 
 };
 
-enum class Actions { LeftClick, LeftRelease, Drag, RDrag, WheelClick, Zoom };
+enum class Actions {None, LeftClick, LeftRelease, Drag, RDrag, WheelClick, Zoom };
 struct updData {
 	float zoom = 0;
 	Vector2i pos;
 };
 
-class WindowManager {
+class WindowManager: public Drawable {
 private:
-	Clock& clock;
-	RenderWindow& window;
 
 public:
 	vector<RectangleShader*> shaderWindows;
-	WindowManager(Clock& clk, RenderWindow& wnd) : clock(clk), window(wnd) {
-
-	}
+	WindowManager() {}
 	unsigned getWindowIndex(Option* opt) {
 		for (unsigned i = 0; i < shaderWindows.size(); ++i) {
 			if (shaderWindows[i]->opt == opt) return i;
 		}
 	}
 	void update(Actions type, updData data, FloatRect restricted = FloatRect()) {
-		if (restricted.contains(Vector2f(Mouse::getPosition()))) return;
+		if (restricted.contains(InputPos::getWF())) return;
 
 		for (int i = shaderWindows.size() - 1; i >= 0; --i) {
-			RectangleShader* wnd = shaderWindows[i];
+			RectangleShader& wnd = *shaderWindows[i];
 
 			if (i == shaderWindows.size() - 1 && type == Actions::Drag) {
-				wnd->move(data.pos);
+				wnd.move(data.pos);
 			}
 
 			if (type == Actions::LeftRelease)
-				wnd->setMoveType(data.pos);
+				wnd.setMoveType(data.pos);
 
-			if (wnd->getBoundary().contains(Vector2f(Mouse::getPosition()))) {
+			if (wnd.getBoundary().contains(InputPos::getWF())) {
 				switch (type) {
 				case Actions::WheelClick:
-					wnd->smode = !wnd->smode;
+					wnd.smode = !wnd.smode;
 					break;
 				case Actions::Zoom:
-					wnd->zoom(data.zoom);
+					wnd.zoom(data.zoom);
 					break;
 				case Actions::LeftClick:
-					wnd->setMoveType(data.pos);
+					wnd.setMoveType(data.pos);
 					swap(shaderWindows[i], shaderWindows[shaderWindows.size() - 1]);
 					break;
 				/*case Actions::Drag:
 					wnd->move(data.pos);
 					break;*/
 				case Actions::RDrag:
-					wnd->iMouseUpdate();
+					wnd.iMouseUpdate();
 					break;
 				}
 				break;
 			}
 		}
 	}
-	void draw() {
-		for (auto* wnd : shaderWindows) wnd->draw();
+	virtual void draw(sf::RenderTarget& target, sf::RenderStates states) const {
+		for (auto* wnd : shaderWindows) target.draw(*wnd, states);
 	}
 };
 
-class SideMenu {
+class SideMenu: public Drawable {
 private:
 	RectangleShape menuBlock;
 	ConvexShape sideButton;
-	RenderWindow& window;
-	Clock& clock;
-	bool closed = true;
-	Button* addShader;
+	bool closed = true, closeAnim = false;
+	int animFrame = 0; 
+	const int animLength = 10;
+	Button addShader;
 	vector<Option*> loadedShaders;
 	WindowManager& wm;
 public:
-	SideMenu(RenderWindow& window, Clock& clk, WindowManager& wman) : window(window), clock(clk), wm(wman) {
-		Vector2f size = Vector2f(window.getSize());
+	SideMenu(WindowManager& wman) : wm(wman) {
+		Vector2f size = InputPos::getWFSize();
 		menuBlock.setFillColor(Color(60, 60, 60, 150));
 		menuBlock.setSize(size * Vector2f(0.25, 0.75));
 		menuBlock.setPosition(size * Vector2f(-0.25, 0.1));
@@ -389,31 +441,16 @@ public:
 		sideButton.setPosition({ 0, size.y * 0.25f });
 		sideButton.setFillColor(Color::Cyan);
 
-		addShader = new Button(size * Vector2f(-0.15, 0.75), Vector2f(size.y*0.05, size.y*0.05), window, L"res/add.png");
+		addShader.init(size * Vector2f(-0.15, 0.75), Vector2f(size.y*0.05, size.y*0.05), L"res/add.png");
 	}
-	~SideMenu() {
-		delete addShader;
-	}
-	void update() {
-		if (sideButton.getGlobalBounds().contains(Vector2f(Mouse::getPosition(window)))) {
-			Vector2f delta = { window.getSize().x * 0.25f, 0 };
-			if (!closed) delta = -delta;
-			closed = !closed;
-			menuBlock.move(delta);
-			sideButton.move(delta);
-			addShader->move(delta);
-			for (auto* opt : loadedShaders)
-				opt->move(delta);
-		}
-	}
+
 	void addOption() {
 		if (loadedShaders.size() >= 7) return;
-		loadedShaders.push_back(nullptr);
-		int index = loadedShaders.size() - 1;
-		loadedShaders[index] = new Option(menuBlock.getPosition() + menuBlock.getSize() * Vector2f(0.1, 0.05 + 0.1 * index),
-			menuBlock.getSize() * Vector2f(0.8, 0.06),  window);
-		wm.shaderWindows.push_back(nullptr);
-		wm.shaderWindows[index] = new RectangleShader(Vector2f(window.getSize()) / 2.f, Vector2f(window.getSize()) / 4.f, clock, window, loadedShaders[index]);
+		int index = loadedShaders.size();
+		loadedShaders.push_back( new Option(menuBlock.getPosition() + menuBlock.getSize() * Vector2f(0.1, 0.05 + 0.1 * index),
+			menuBlock.getSize() * Vector2f(0.8, 0.06)));
+
+		wm.shaderWindows.push_back(new RectangleShader(InputPos::getWFSize() / 2.f, InputPos::getWFSize() / 4.f, loadedShaders[index]));
 	}
 	void deleteOption(int i) {
 		if (i < 0) return;
@@ -426,11 +463,26 @@ public:
 			loadedShaders[k]->move(menuBlock.getSize() * Vector2f(0, -0.1));
 		}
 	}
-	FloatRect getBoundary() {
-		return menuBlock.getGlobalBounds();
-	}
-	void draw() {
-		if (addShader->handle()) {
+
+	void update(Actions type = Actions::None) {
+
+		if (type == Actions::LeftClick && sideButton.getGlobalBounds().contains(InputPos::getWF()) && !closeAnim) {
+			closed = !closed;
+			closeAnim = true;
+			animFrame = 0;
+		}
+		if (closeAnim) {
+			Vector2f delta = Vector2f{ InputPos::getWSize().x * 0.25f, 0 } / float(animLength);
+			if (closed) delta = -delta;
+			menuBlock.move(delta);
+			sideButton.move(delta);
+			addShader.move(delta);
+			for (auto* opt : loadedShaders)
+				opt->move(delta);
+			animFrame++;
+			if (animFrame >= animLength) closeAnim = false;
+		}
+		if (addShader.handle()) {
 			addOption();
 		}
 		int to_delete = -1;
@@ -439,11 +491,18 @@ public:
 		}
 		deleteOption(to_delete);
 
-		window.draw(menuBlock);
-		window.draw(sideButton);
-		addShader->draw();
+	}
+	
+	FloatRect getBoundary() {
+		return menuBlock.getGlobalBounds();
+	}
+	virtual void draw(sf::RenderTarget& target, sf::RenderStates states) const {
+
+		target.draw(menuBlock);
+		target.draw(sideButton);
+		target.draw(addShader);
 		for (auto* opt : loadedShaders) {
-			opt->draw();
+			target.draw(*opt);
 		}
 	}
 };
@@ -451,8 +510,9 @@ public:
 class FPSmeter {
 public:
 	sf::Text FPS;
-	sf::Clock clock;
-	float lastTime = clock.getElapsedTime().asSeconds(), currentTime;
+	sf::Clock fpsclock;
+	float lastTime = fpsclock.getElapsedTime().asSeconds();
+	float currentTime;
 	FPSmeter(sf::Vector2f pos, int c) {
 		FPS.setFont(font);
 		FPS.setCharacterSize(c);
@@ -460,10 +520,10 @@ public:
 		FPS.setFillColor(sf::Color::White);
 	}
 	int draw(sf::RenderWindow& window) {
-		currentTime = clock.getElapsedTime().asSeconds();
+		currentTime = fpsclock.getElapsedTime().asSeconds();
 		int fps = floor(1.f / (currentTime - lastTime));
 		lastTime = currentTime;
-		FPS.setString(to_string(fps));
+		FPS.setString(std::to_string(fps));
 		window.draw(FPS);
 		return fps;
 	}
@@ -472,16 +532,16 @@ public:
 int main() {
 	font.loadFromFile("res/Mulish.ttf");
 
-	RenderWindow window(VideoMode::getDesktopMode(), "Shader works!", Style::None);
+	RenderWindow window(VideoMode::getDesktopMode(), "ShaderTester", Style::None);
 	window.setVerticalSyncEnabled(true);
-
-	Clock clock;
-
+	InputPos::window = &window;
+	
 	Vector2i lastPos;
 
-	WindowManager wm(clock, window);
-	SideMenu menu(window, clock, wm);
-	FPSmeter fps(Vector2f(window.getSize())/100.f, 15);
+	WindowManager wm;
+	SideMenu menu(wm);
+	FPSmeter fps(InputPos::getWFSize()/100.f, 15);
+
 	while (window.isOpen())
 	{
 		Event event;
@@ -506,7 +566,7 @@ int main() {
 					lastPos = Mouse::getPosition(window);
 					data.pos = lastPos;
 					wm.update(Actions::LeftClick, data, menu.getBoundary());
-					menu.update();
+					menu.update(Actions::LeftClick);
 					break;
 				case Mouse::Middle:
 					wm.update(Actions::WheelClick, data, menu.getBoundary());
@@ -530,10 +590,14 @@ int main() {
 			wm.update(Actions::RDrag, data);
 		}
 
+		menu.update();
+
 		window.clear();
-		wm.draw();
-		menu.draw();
+
+		window.draw(wm);
+		window.draw(menu);
 		fps.draw(window);
+
 		window.display();
 	}
 
